@@ -857,13 +857,121 @@ body.edit-on .kits-grid[data-off],body.edit-on .group-label[data-off] h3,body.ed
 </div>
 
 
+<!-- Modal: contingencia caso o navegador/app bloqueie a abertura automatica do WhatsApp -->
+<div class="overlay" id="waFallbackOverlay" style="z-index:10000">
+  <div class="modal-box small">
+    <div class="modal-head">
+      <span class="tag">Quase l&aacute;</span>
+      <h3>Continue no WhatsApp</h3>
+      <button class="modal-close" onclick="closeOverlay('waFallbackOverlay')">&times;</button>
+    </div>
+    <div class="modal-body">
+      <p style="margin:0 0 14px;font-size:0.93rem;color:var(--ink);">Seu navegador bloqueou a abertura autom&aacute;tica. Toque no bot&atilde;o abaixo para abrir o WhatsApp com a mensagem j&aacute; preenchida.</p>
+      <a id="waFallbackLink" class="modal-submit" href="https://wa.me/5521973676671" target="_blank" rel="noopener noreferrer" style="text-decoration:none;cursor:pointer;" onclick="setTimeout(function(){closeOverlay('waFallbackOverlay')},400)">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="currentColor"><path d="M12.04 2C6.58 2 2.13 6.45 2.13 11.91c0 1.71.45 3.38 1.3 4.85L2 22l5.36-1.4a9.9 9.9 0 0 0 4.68 1.19h.01c5.46 0 9.9-4.45 9.9-9.9 0-2.65-1.03-5.13-2.9-7A9.82 9.82 0 0 0 12.04 2z"></path></svg>
+        Abrir WhatsApp
+      </a>
+      <div id="waFallbackMsgWrap" style="margin-top:16px;">
+        <div class="field" style="margin-bottom:10px;"><label>Sua mensagem</label><textarea id="waFallbackText" rows="5" readonly onfocus="this.select()"></textarea></div>
+        <button type="button" id="waCopyBtn" class="modal-submit" style="background:transparent;color:var(--pine);border:1px solid var(--pine);cursor:pointer;" onclick="copyWhatsAppMessage()">Copiar mensagem</button>
+      </div>
+      <p class="modal-fine">Se preferir, envie a mensagem para o WhatsApp (21) 97367-6671.</p>
+      <p class="modal-fine"><a id="waFallbackTop" href="https://wa.me/5521973676671" target="_top" rel="noopener noreferrer" style="color:var(--pine);font-weight:600;">Abrir na mesma janela</a></p>
+    </div>
+  </div>
+</div>
+
 <script id="cfgScript">var CFG = {"vit":{"ceia":1,"natal":1,"anonovo":1,"oferta":0},"custom":1,"pop":{"promo":0,"mini":0}};</script>
 <script id="mainScript">
 var WHATSAPP_LINK = "https://wa.me/5521973676671";
 
+/* ---------- Abertura do WhatsApp (compativel com o iframe da VIPCommerce) ----------
+   Problema original: window.location.href dentro de um iframe navega o PROPRIO iframe,
+   e o wa.me recusa ser exibido dentro de frames (X-Frame-Options / frame-ancestors),
+   resultando em area em branco e nenhuma conversa aberta.
+   Estrategia (tudo roda sincrono dentro do clique/submit do usuario, para nao ser
+   tratado como pop-up indesejado):
+     1) window.open(url,'_blank')  -> nova aba (ou o proprio app/WebView trata o link);
+     2) se bloqueado: navega a janela principal (window.top), saindo do iframe;
+     3) se nada disso for confirmado: mostra painel com link direto, botao de copiar
+        a mensagem e o numero, para o cliente nunca ficar sem conseguir pedir. */
+var _waLast = { url: WHATSAPP_LINK, message: "" };
+var _waWatch = null;
+
+function waInIframe(){
+  try { return window.self !== window.top; } catch(e){ return true; }
+}
+
 function goToWhatsApp(message){
   var url = WHATSAPP_LINK + (message ? ("?text="+encodeURIComponent(message)) : "");
-  window.location.href = url;
+  _waLast = { url: url, message: message || "" };
+
+  // 1) nova aba / janela
+  var w = null;
+  try { w = window.open(url, "_blank"); } catch(e){ w = null; }
+  if(w && !w.closed){
+    try { w.opener = null; } catch(e){}
+    return true;
+  }
+
+  // 2) pop-up bloqueado: tenta sair do iframe navegando a janela principal
+  var attempted = false;
+  try {
+    if(waInIframe()){ window.top.location.href = url; }
+    else { window.location.href = url; }
+    attempted = true;
+  } catch(e){ attempted = false; }
+
+  // 3) rede de seguranca: se a pagina continuar visivel, mostra o painel de contingencia
+  //    (alguns navegadores bloqueiam a navegacao do topo sem lancar erro)
+  if(!attempted){ showWhatsAppFallback(); }
+  else {
+    if(_waWatch) clearTimeout(_waWatch);
+    _waWatch = setTimeout(function(){
+      _waWatch = null;
+      if(!document.hidden) showWhatsAppFallback();
+    }, 1600);
+  }
+  return false;
+}
+
+(function(){
+  function stopWatch(){ if(_waWatch){ clearTimeout(_waWatch); _waWatch = null; } }
+  document.addEventListener("visibilitychange", function(){ if(document.hidden) stopWatch(); });
+  window.addEventListener("pagehide", stopWatch);
+})();
+
+function showWhatsAppFallback(){
+  var url = _waLast.url, msg = _waLast.message;
+  var a = document.getElementById("waFallbackLink");  if(a) a.href = url;
+  var t = document.getElementById("waFallbackTop");   if(t) t.href = url;
+  var ta = document.getElementById("waFallbackText"); if(ta) ta.value = msg;
+  var wrap = document.getElementById("waFallbackMsgWrap");
+  if(wrap) wrap.style.display = msg ? "" : "none";
+  // adiado: roda depois dos closeOverlay() do chamador (que limpam o overflow do body)
+  setTimeout(function(){ openOverlay("waFallbackOverlay"); }, 0);
+}
+
+function copyWhatsAppMessage(){
+  var text = _waLast.message || "";
+  var btn = document.getElementById("waCopyBtn");
+  var ta = document.getElementById("waFallbackText");
+  function feedback(ok){
+    if(!btn) return;
+    var old = btn.getAttribute("data-label");
+    if(!old){ old = btn.textContent; btn.setAttribute("data-label", old); }
+    btn.textContent = ok ? "Mensagem copiada \u2713" : "Toque na mensagem acima para copiar";
+    setTimeout(function(){ btn.textContent = old; }, 2200);
+  }
+  function legacy(){
+    try {
+      if(ta){ ta.focus(); ta.select(); ta.setSelectionRange(0, ta.value.length); }
+      return document.execCommand("copy");
+    } catch(e){ return false; }
+  }
+  if(navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(text).then(function(){ feedback(true); }, function(){ feedback(legacy()); });
+  } else { feedback(legacy()); }
 }
 var checkIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M20 6L9 17l-5-5"/></svg>';
 
